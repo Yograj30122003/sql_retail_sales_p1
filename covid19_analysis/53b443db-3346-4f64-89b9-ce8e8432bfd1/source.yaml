@@ -1,0 +1,299 @@
+link: https://app.fabi.ai/notebook/53b443db-3346-4f64-89b9-ce8e8432bfd1
+uuid: 53b443db-3346-4f64-89b9-ce8e8432bfd1
+title: COVID-19 Data Analysis Report
+author: Yograj Shingne
+cells:
+- type: PYTHON
+  name: python_cell_1
+  uuid: 2fbcf6a1-9d21-43ce-9eb3-9cadbae2749a
+  source: |-
+    import zipfile
+    import pandas as pd
+    import os
+
+    # Specify the path to the zip file and the directory for extraction
+    zip_path = "archive (1).zip"
+    extract_dir = "extracted_data"
+
+    # Create the extraction directory if it doesn't exist
+    os.makedirs(extract_dir, exist_ok=True)
+
+    # Unzip the file
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(extract_dir)
+
+    # List the files in the extraction directory
+    extracted_files = os.listdir(extract_dir)
+    print(f"Extracted files: {extracted_files}")
+
+    # Find the first CSV file and load it into a DataFrame
+    # This assumes the primary dataset is the first CSV found
+    for file_name in extracted_files:
+        if file_name.endswith(".csv"):
+            csv_path = os.path.join(extract_dir, file_name)
+            try:
+                df = pd.read_csv(csv_path)
+                print(f"Successfully loaded {file_name} into a DataFrame.")
+                # Once a CSV is loaded, exit the loop
+                break
+            except Exception as e:
+                print(f"Could not read {file_name}: {e}")
+
+    # Display the first few rows of the DataFrame to get an overview
+    display(df.head())
+  configuration: {}
+- type: PYTHON
+  name: python_cell_2
+  uuid: 5e98469d-4500-4975-bef5-2b9b7f79f281
+  source: |-
+    # Create a copy to avoid SettingWithCopyWarning
+    df_cleaned = df.copy()
+
+    # Fill missing values in 'Province/State'
+    df_cleaned["Province/State"].fillna("Unknown", inplace=True)
+
+    # Convert 'ObservationDate' and 'Last Update' to datetime objects
+    df_cleaned["ObservationDate"] = pd.to_datetime(df_cleaned["ObservationDate"])
+    df_cleaned["Last Update"] = pd.to_datetime(df_cleaned["Last Update"], format="mixed")
+
+
+    # Display the info of the cleaned DataFrame to verify the changes
+    df_cleaned.info()
+
+    # Display the first few rows of the cleaned DataFrame
+    display(df_cleaned.head())
+  configuration:
+    conditional_formatting: null
+    title: null
+    description: null
+- type: PYTHON
+  name: python_cell_3
+  uuid: bb715f92-06ee-41d1-aae8-444d894af6e3
+  source: |-
+    import altair as alt
+    import pandas as pd
+
+    # Filter for India
+    india_df = df_cleaned[df_cleaned["Country/Region"] == "India"].copy()
+
+    # Group data by observation date to get cumulative cases
+    time_series_df = (
+        india_df.groupby("ObservationDate")
+        .agg({"Confirmed": "sum", "Deaths": "sum", "Recovered": "sum"})
+        .reset_index()
+    )
+
+    # Sort by date to ensure correct diff calculation
+    time_series_df = time_series_df.sort_values("ObservationDate")
+
+    # Calculate daily cases by taking the difference of the cumulative values
+    daily_df = pd.DataFrame(
+        {
+            "ObservationDate": time_series_df["ObservationDate"],
+            "Daily Confirmed": time_series_df["Confirmed"].diff().fillna(0),
+            "Daily Deaths": time_series_df["Deaths"].diff().fillna(0),
+            "Daily Recovered": time_series_df["Recovered"].diff().fillna(0),
+        }
+    )
+
+    # Calculate 7-day moving average for daily cases
+    daily_df["MA Confirmed"] = daily_df["Daily Confirmed"].rolling(window=7).mean()
+    daily_df["MA Deaths"] = daily_df["Daily Deaths"].rolling(window=7).mean()
+    daily_df["MA Recovered"] = daily_df["Daily Recovered"].rolling(window=7).mean()
+
+
+    # Melt the DataFrame for Altair for visualization
+    daily_melted = daily_df.melt(
+        id_vars=["ObservationDate"],
+        value_vars=["Daily Confirmed", "Daily Deaths", "Daily Recovered"],
+        var_name="Case Type",
+        value_name="Number of Cases",
+    )
+
+    moving_avg_melted = daily_df.melt(
+        id_vars=["ObservationDate"],
+        value_vars=["MA Confirmed", "MA Deaths", "MA Recovered"],
+        var_name="Case Type",
+        value_name="Moving Average",
+    )
+
+    # Map moving average case types to original case types for color consistency
+    moving_avg_melted["Case Type"] = moving_avg_melted["Case Type"].replace(
+        {
+            "MA Confirmed": "Daily Confirmed",
+            "MA Deaths": "Daily Deaths",
+            "MA Recovered": "Daily Recovered",
+        }
+    )
+
+
+    # Create the base chart with bars for daily cases
+    base = (
+        alt.Chart(daily_melted)
+        .mark_bar(opacity=0.5)
+        .encode(
+            x=alt.X("ObservationDate:T", title="Date"),
+            y=alt.Y("Number of Cases:Q", title="Number of New Cases"),
+            color=alt.Color("Case Type:N", title="Case Type"),
+        )
+    )
+
+    # Create the line chart for the moving average
+    line = (
+        alt.Chart(moving_avg_melted)
+        .mark_line()
+        .encode(
+            x=alt.X("ObservationDate:T", title="Date"),
+            y=alt.Y("Moving Average:Q", title="7-Day Moving Average"),
+            color=alt.Color("Case Type:N", title="Case Type"),
+        )
+    )
+
+    # Find the day with the highest number of confirmed cases
+    highlight_day = daily_df.loc[daily_df["Daily Confirmed"].idxmax()]
+
+    # Create a DataFrame for the highlight point
+    highlight_df = pd.DataFrame(
+        {
+            "ObservationDate": [highlight_day["ObservationDate"]],
+            "Number of Cases": [highlight_day["Daily Confirmed"]],
+            "Case Type": ["Daily Confirmed"],
+        }
+    )
+
+    # Create a point layer to highlight the peak
+    highlight_point = (
+        alt.Chart(highlight_df)
+        .mark_point(size=100, color="red", filled=True)
+        .encode(
+            x="ObservationDate:T",
+            y="Number of Cases:Q",
+            tooltip=[
+                alt.Tooltip("ObservationDate", title="Date"),
+                alt.Tooltip("Number of Cases", title="Highest Cases"),
+            ],
+        )
+    )
+
+
+    # Combine the charts
+    chart = (
+        (base + line + highlight_point)
+        .properties(title="Daily COVID-19 Cases and 7-Day Moving Average in India")
+        .interactive()
+    )
+
+    display(chart)
+  configuration:
+    conditional_formatting: null
+    title: null
+    description: null
+- type: PYTHON
+  name: python_cell_4
+  uuid: 9742cfba-0b06-4edf-8e81-7880830c8ac4
+  source: |-
+    import pandas as pd
+
+    # Calculate the total confirmed, recovered, and deaths
+    total_confirmed = df_cleaned["Confirmed"].sum()
+    total_recovered = df_cleaned["Recovered"].sum()
+    total_deaths = df_cleaned["Deaths"].sum()
+
+    # Create a summary DataFrame
+    summary_df = pd.DataFrame(
+        {
+            "Case Type": ["Confirmed", "Recovered", "Deaths"],
+            "Total Cases": [total_confirmed, total_recovered, total_deaths],
+        }
+    )
+
+    # Display the summary DataFrame
+    display(summary_df)
+  configuration:
+    conditional_formatting: null
+    title: null
+    description: null
+- type: PYTHON
+  name: python_cell_5
+  uuid: af015786-6e3e-469f-b45d-3ede1605cf9e
+  source: |-
+    import altair as alt
+    import pandas as pd
+
+    # Group by country and get the latest cumulative confirmed cases
+    top_10_countries = (
+        df_cleaned.groupby("Country/Region")["Confirmed"].max().nlargest(10).reset_index()
+    )
+
+    # Create the bar chart
+    chart = (
+        alt.Chart(top_10_countries)
+        .mark_bar()
+        .encode(
+            x=alt.X("Country/Region:N", sort="-y", title="Country"),
+            y=alt.Y("Confirmed:Q", title="Confirmed Cases"),
+        )
+        .properties(title="Top 10 Countries with Highest Confirmed COVID-19 Cases")
+    )
+
+    display(chart)
+  configuration:
+    conditional_formatting: null
+    title: null
+    description: null
+- type: PYTHON
+  name: python_cell_6
+  uuid: 089289fb-f326-4e83-ba85-4985d393ad0d
+  source: |-
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    # Select the columns for the correlation heatmap
+    correlation_df = df_cleaned[["Confirmed", "Recovered", "Deaths"]]
+
+    # Calculate the correlation matrix
+    correlation_matrix = correlation_df.corr()
+
+    # Create the heatmap
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(correlation_matrix, annot=True, cmap="coolwarm", fmt=".2f")
+    plt.title("Correlation Heatmap of COVID-19 Cases")
+    plt.show()
+  configuration:
+    conditional_formatting: null
+    title: null
+    description: null
+- type: PYTHON
+  name: python_cell_7
+  uuid: 75d2c8c5-fde6-441d-ac76-1da872ef7735
+  source: |-
+    import altair as alt
+    import pandas as pd
+
+    # Group by observation date to get the cumulative confirmed cases globally
+    global_cases = df_cleaned.groupby("ObservationDate")["Confirmed"].sum().reset_index()
+
+    # Sort by date
+    global_cases = global_cases.sort_values("ObservationDate")
+
+    # Calculate the daily growth rate
+    global_cases["Growth Rate"] = global_cases["Confirmed"].pct_change()
+
+    # Create the line chart
+    chart = (
+        alt.Chart(global_cases)
+        .mark_line()
+        .encode(
+            x=alt.X("ObservationDate:T", title="Date"),
+            y=alt.Y("Growth Rate:Q", title="Daily Growth Rate", axis=alt.Axis(format="%")),
+            tooltip=["ObservationDate", alt.Tooltip("Growth Rate:Q", format=".2%")],
+        )
+        .properties(title="Daily Growth Rate of Confirmed COVID-19 Cases Globally")
+        .interactive()
+    )
+
+    display(chart)
+  configuration:
+    conditional_formatting: null
+    title: null
+    description: null
